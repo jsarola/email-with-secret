@@ -19,7 +19,7 @@ Useful for securely distributing passwords, tokens, or any one-time sensitive in
 
 - Python 3.8+
 
----
+---e
 
 ## Installation
 
@@ -49,7 +49,7 @@ Poetry creates a `.venv` folder inside the project directory (or in its cache, d
 
 ```bash
 poetry config virtualenvs.in-project true  # run once, applies globally
-poetry install
+poetry install 
 ```
 
 **3. Activate the virtual environment:**
@@ -79,15 +79,64 @@ poetry remove <package>
 
 ---
 
+## Local development environment
+
+A `compose.yml` is included to spin up a full local stack — no external services or real credentials needed.
+
+### Services
+
+| Service | Purpose | URL |
+|---------|---------|-----|
+| **MailDev** | Catches all outgoing emails — nothing is actually sent | http://localhost:1080 |
+| **Redis** | Backend store for OneTimeSecret | — |
+| **OneTimeSecret** | Self-hosted secret link generator | http://localhost:3000 |
+
+### Start the stack
+
+Generate a secret key and start all services:
+
+```bash
+# Generate a random secret key (Linux/macOS)
+openssl rand -hex 32
+
+# On Windows (PowerShell)
+[System.Convert]::ToHexString((1..32 | ForEach-Object { [byte](Get-Random -Max 256) })).ToLower()
+```
+
+Set the generated value as the `SECRET` environment variable in `compose.yml` (replace `changeme_generate_with_openssl_rand_hex_32`), then:
+
+```bash
+docker compose up -d
+```
+
+### Run the script against the local stack
+
+```bash
+python send.py -f example.csv -t templates/default.html.j2 -c config.dev.ini
+```
+
+- Emails are visible at **http://localhost:1080** (MailDev web UI).
+- Secret links are created at **http://localhost:3000**.
+
+### Stop the stack
+
+```bash
+docker compose down
+```
+
+---
+
 ## Configuration
 
-Copy the example config and fill in your credentials:
+Two config files are supported — one for production, one for local development. Neither is committed to version control.
+
+### `config.ini` — production
+
+Copy the example and fill in your real credentials:
 
 ```bash
 cp config.ini.example config.ini
 ```
-
-`config.ini` structure:
 
 ```ini
 [smtp]
@@ -104,8 +153,28 @@ api_user = user@example.com
 api_key = your_api_key
 ```
 
-- `url` under `[onetimesecret]` accepts both the public service (`https://onetimesecret.com`) and self-hosted instances (e.g. `https://secret.example.com`).
-- `config.ini` is not committed to version control. Only `config.ini.example` (with placeholder values) is.
+`url` under `[onetimesecret]` accepts both the public service (`https://onetimesecret.com`) and self-hosted instances (e.g. `https://secret.example.com`).
+
+### `config.dev.ini` — local development
+
+Pre-configured to work with the Docker Compose stack above. No changes needed.
+
+```ini
+[smtp]
+host = localhost
+port = 1025
+username = dev
+password = devpass
+from = dev@localhost
+use_tls = false
+
+[onetimesecret]
+url = http://localhost:3000
+api_user = dev@localhost
+api_key = changeme_generate_with_openssl_rand_hex_32
+```
+
+`use_tls = false` is required because MailDev does not support STARTTLS.
 
 ---
 
@@ -150,23 +219,24 @@ A default template is provided at `templates/default.html.j2`.
 
 ```bash
 # Send to all rows in the CSV
-python send.py --file example.csv --template templates/default.html.j2
+python send.py -f example.csv -t templates/default.html.j2
 
 # Send only to the row with id=1
-python send.py --file example.csv --template templates/default.html.j2 --id 1
+python send.py -f example.csv -t templates/default.html.j2 -i 1
 
 # Use a custom config file
-python send.py --file example.csv --template templates/default.html.j2 --config /path/to/config.ini
+python send.py -f example.csv -t templates/default.html.j2 -c config.dev.ini
 ```
 
 ### Arguments
 
-| Argument | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `--file` | Yes | — | Path to the CSV file |
-| `--template` | Yes | — | Path to the Jinja2 template |
-| `--id` | No | — | Only process the row with this id |
-| `--config` | No | `config.ini` | Path to the config file |
+| Short | Long | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `-h` | `--help` | No | — | Show help message and exit |
+| `-f` | `--file` | Yes | — | Path to the semicolon-delimited CSV file |
+| `-t` | `--template` | Yes | — | Path to the Jinja2 HTML email template |
+| `-i` | `--id` | No | — | Only process the row whose id matches this value |
+| `-c` | `--config` | No | `config.ini` | Path to the INI config file |
 
 ---
 
@@ -175,8 +245,10 @@ python send.py --file example.csv --template templates/default.html.j2 --config 
 ```
 email-with-secret/
 ├── send.py               # Main script
-├── config.ini            # Your local config (not committed)
+├── config.ini            # Production config (not committed)
+├── config.dev.ini        # Local dev config — points to Docker stack (not committed)
 ├── config.ini.example    # Config template (safe to commit)
+├── compose.yml           # Docker Compose — MailDev + OneTimeSecret + Redis
 ├── example.csv           # Sample CSV with one row
 ├── pyproject.toml        # Poetry project definition
 ├── requirements.txt      # pip dependencies (alternative to Poetry)
@@ -186,15 +258,15 @@ email-with-secret/
     └── default.html.j2   # Default email template
 ```
 
----
+--
 
 ## OneTimeSecret API
 
-The tool uses the [OneTimeSecret REST API](https://docs.onetimesecret.com/):
+The tool uses the [OneTimeSecret REST API v2](https://api.onetimesecret.com/):
 
-- **Endpoint:** `POST {url}/api/v1/share`
+- **Endpoint:** `POST {url}/api/v2/guest/secret/conceal`
 - **Auth:** HTTP Basic (`api_user:api_key`)
-- **Payload:** form field `secret=<data>`
-- **Response:** JSON with `secret_key`; final link is `{url}/secret/{secret_key}`
+- **Payload:** JSON body `{"secret": "<data>"}`
+- **Response:** JSON — the shareable link is at `record.share_url`
 
 The link can only be opened once — after that it is permanently destroyed.

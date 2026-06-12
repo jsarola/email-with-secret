@@ -6,6 +6,7 @@ import sys
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
@@ -22,17 +23,27 @@ def load_config(path: str) -> configparser.ConfigParser:
 
 
 def create_secret(ots_url: str, api_user: str, api_key: str, data: str) -> str:
-    endpoint = f"{ots_url.rstrip('/')}/api/v1/share"
+    base = ots_url.rstrip("/")
+    share_domain = urlparse(base).netloc  # e.g. "localhost:3000" or "onetimesecret.com"
+    endpoint = f"{base}/api/v2/guest/secret/conceal"
+    body = {
+        "secret": {
+            "kind": "conceal",
+            "secret": data,
+            "share_domain": share_domain,
+        }
+    }
     try:
         resp = requests.post(
             endpoint,
-            data={"secret": data},
+            json=body,
             auth=(api_user, api_key),
             timeout=15,
         )
         resp.raise_for_status()
-        secret_key = resp.json()["secret_key"]
-        return f"{ots_url.rstrip('/')}/secret/{secret_key}"
+        payload = resp.json()
+        secret_key = payload["record"]["secret"]["key"]
+        return f"{base}/secret/{secret_key}"
     except (requests.RequestException, KeyError) as exc:
         raise RuntimeError(f"OTS API error: {exc}") from exc
 
@@ -52,7 +63,10 @@ def send_email(cfg: configparser.ConfigParser, to: str, subject: str, html_body:
     with smtplib.SMTP(host, port) as server:
         if use_tls:
             server.starttls()
-        server.login(smtp_cfg["username"], smtp_cfg["password"])
+        username = smtp_cfg.get("username", "")
+        password = smtp_cfg.get("password", "")
+        if username and password:
+            server.login(username, password)
         server.sendmail(smtp_cfg["from"], to, msg.as_string())
 
 
@@ -66,11 +80,54 @@ def load_template(template_path: str):
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Send personalised secrets via email.")
-    parser.add_argument("--file", required=True, help="Path to semicolon-delimited CSV (id;name;data;email)")
-    parser.add_argument("--template", required=True, help="Path to Jinja2 email template")
-    parser.add_argument("--id", dest="filter_id", default=None, help="Only process rows with this id")
-    parser.add_argument("--config", default="config.ini", help="Path to config file (default: config.ini)")
+    parser = argparse.ArgumentParser(
+        prog="send.py",
+        description=(
+            "Read recipients from a CSV file, create a OneTimeSecret link for each\n"
+            "recipient's secret data, and send a personalised HTML email via SMTP."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "CSV format (no header, semicolon-delimited):\n"
+            "  id;name;data;email\n"
+            "  1;John Ripper;123456789;john.ripper@mail.com\n"
+            "\n"
+            "Template variables available in Jinja2 templates:\n"
+            "  {{ id }}          Row id from the CSV\n"
+            "  {{ name }}        Recipient name\n"
+            "  {{ secret_url }}  Generated OneTimeSecret link\n"
+            "\n"
+            "Examples:\n"
+            "  python send.py -f example.csv -t templates/default.html.j2\n"
+            "  python send.py -f example.csv -t templates/default.html.j2 -i 1\n"
+            "  python send.py -f data.csv -t templates/default.html.j2 -c config.dev.ini\n"
+        ),
+    )
+    parser.add_argument(
+        "-f", "--file",
+        required=True,
+        metavar="FILE",
+        help="Path to the semicolon-delimited CSV file (columns: id;name;data;email).",
+    )
+    parser.add_argument(
+        "-t", "--template",
+        required=True,
+        metavar="TEMPLATE",
+        help="Path to the Jinja2 HTML email template (.html.j2).",
+    )
+    parser.add_argument(
+        "-i", "--id",
+        dest="filter_id",
+        default=None,
+        metavar="ID",
+        help="Only process the row whose id matches this value. Omit to process all rows.",
+    )
+    parser.add_argument(
+        "-c", "--config",
+        default="config.ini",
+        metavar="CONFIG",
+        help="Path to the INI config file with [smtp] and [onetimesecret] sections. (default: config.ini)",
+    )
     return parser.parse_args()
 
 
