@@ -1,0 +1,12 @@
+[smtp]
+host = smtp.example.com
+port = 587
+username = user@example.com
+password = secret
+from = user@example.com
+use_tls = true
+
+[onetimesecret]
+url = https://onetimesecret.com
+api_user = user@example.com
+api_key = your_api_key

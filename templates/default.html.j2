@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Your secure link</title>
+</head>
+<body>
+  <p>Hello {{ name }},</p>
+
+  <p>Your information is available via a one-time secret link below.
+  Once opened, the link will no longer be accessible.</p>
+
+  <p><a href="{{ secret_url }}">{{ secret_url }}</a></p>
+
+  <p>Regards</p>
+</body>
+</html>
